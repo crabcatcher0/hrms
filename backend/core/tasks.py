@@ -1,11 +1,14 @@
+from datetime import timedelta
 import dramatiq
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from dramatiq_crontab import cron  # type: ignore
 
 from core.models import AbsenceBalance
 from core.models import Settings
+from core.models import TimeLog
 from core.models import User
 
 
@@ -37,7 +40,21 @@ def absence_balance_credit():
         )
 
 
+def check_time_logs():
+    TimeLog.objects.filter(
+        user__max_time_log_length__gt=timedelta(seconds=0),
+        start__lt=timezone.now() - F("user__max_time_log_length"),
+        end__isnull=True,
+    ).update(end=timezone.now())
+
+
 @cron("0 0 1 * *")
 @dramatiq.actor  # type: ignore
 def absence_balance_credit_cron():
     absence_balance_credit()
+
+
+@cron("*/5 * * * *")
+@dramatiq.actor  # type: ignore
+def check_time_logs_cron():
+    check_time_logs()
