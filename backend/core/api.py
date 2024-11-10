@@ -21,6 +21,7 @@ from django.db.models.functions import Coalesce
 from django.http import HttpRequest
 from django.http import HttpResponse
 from django.shortcuts import get_list_or_404
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
@@ -50,6 +51,7 @@ from core.schemas import GenericDTO
 from core.schemas import HolidayDTO
 from core.schemas import ImportHolidays
 from core.schemas import Login
+from core.schemas import LastSessionDTO
 from core.schemas import ProjectDTO
 from core.schemas import RemainingAbsences
 from core.schemas import StartTimeLog
@@ -61,6 +63,7 @@ from core.schemas import TimeLogSummaryPerDay
 from core.schemas import UserDTO
 from core.schemas import UserListDTO
 from core.schemas import WorkingHoursSummary
+from core.tasks import track_session_duration  # type: ignore
 
 api = NinjaAPI(docs_url="/docs/", csrf=True)
 
@@ -230,6 +233,55 @@ def end_time_log(request: HttpRequest):
 
 
 @api.post(
+    "time-logs/start-with-last-duration/",
+    auth=django_auth,
+    response={200: LastSessionDTO, 400: GenericDTO},
+)
+def start_session_with_last_duration(request: HttpRequest, data: StartTimeLog):
+    try:
+        if TimeLog.objects.filter(user=request.user, end=None).exists():
+            return 400, {"detail": "An active session already exists."}
+
+        last_session = (
+            TimeLog.objects.filter(user=request.user)
+            .order_by("-start")
+            .first()
+        )
+
+        if last_session and last_session.start:
+            end_time = last_session.end or timezone.now()
+            duration = (end_time - last_session.start).total_seconds()
+
+            new_start_time = timezone.now()
+            project = get_object_or_404(Project, pk=data.project)
+            activity = get_object_or_404(Activity, pk=data.activity)
+            new_date = data.date if data.date else new_start_time.date()
+
+            new_session = TimeLog.objects.create(
+                user=request.user,
+                start=new_start_time,
+                end=None,
+                date=new_date,
+                project=project,
+                activity=activity,
+            )
+
+            track_session_duration.send(new_session.id, duration)
+
+            return 200, LastSessionDTO(
+                project=new_session.project.id,
+                activity=new_session.activity.id,
+                date=new_session.date,
+                duration=duration,
+            )
+        else:
+            return 400, {"detail": "No previous session."}
+
+    except Exception as e:
+        return 400, {"detail": f"Error: {str(e)}"}
+
+
+@api.post(
     "/time-logs/users/end/", auth=django_auth_superuser, response=GenericDTO
 )
 def end_users_time_log(request: HttpRequest, data: EndSessionUserIds):
@@ -276,7 +328,9 @@ def time_log_summary(
 
     current_time = timezone.now()
     for u in users:
-        user_data = TimeLogSummaryDTO(user=u.username, user_date_joined=u.date_joined, summary=[])
+        user_data = TimeLogSummaryDTO(
+            user=u.username, user_date_joined=u.date_joined, summary=[]
+        )
         date = start
         while date <= end:
             logs_per_day = [
