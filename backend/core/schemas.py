@@ -165,10 +165,3 @@ class WorkingHoursSummary(Schema):
     working_hours_this_month: float
     working_hours_this_year: float
     working_hours_graph: list[WorkingHoursGraph]
-
-
-class LastSessionDTO(Schema):
-    project: int
-    activity: int
-    date: datetime.date
-    duration: float

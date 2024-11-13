@@ -1,4 +1,3 @@
-from time import sleep
 from datetime import timedelta
 import dramatiq
 from django.core.exceptions import ObjectDoesNotExist
@@ -59,26 +58,3 @@ def absence_balance_credit_cron():
 @dramatiq.actor  # type: ignore
 def check_time_logs_cron():
     check_time_logs()
-
-
-@dramatiq.actor  # type: ignore
-def track_session_duration(session_id: int, duration_seconds: int):
-    try:
-        session = TimeLog.objects.get(id=session_id)
-
-        expected_end_time = session.start + timedelta(seconds=duration_seconds)
-
-        sleep_time = max(0, duration_seconds - 5)
-        sleep(sleep_time)
-
-        session.refresh_from_db()
-
-        if session.end is None:
-            session.end = expected_end_time
-            session.save()
-            print(f"Session {session.id} ended automatically.")
-        else:
-            print(f"Session {session.id} was manually ended.")
-
-    except TimeLog.DoesNotExist:
-        print(f"TimeLog with id {session_id} does not exist.")
